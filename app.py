@@ -15,6 +15,7 @@ if not hasattr(kis_module.KIS,'market_flow'):
 KIS, BrokerError = kis_module.KIS, kis_module.BrokerError
 from predash.classroom import account_settings, connection_form
 from predash.macro import fetch_vix,relative,benchmark,MacroError
+from predash.public_market import fetch_public_market
 from predash.analysis import review
 from predash.health import status as holding_status
 from predash.official import Official, DataError
@@ -37,6 +38,7 @@ import predash.flow as flow_module
 flow_module=importlib.reload(flow_module)
 from predash.dashboard import overview, latest_held_buy
 from predash.visuals import compact_dashboard
+from predash.workspace_ui import apply_workspace_style, render_workspace
 from predash.decision import comparison, brief, export_review, EvidenceError
 from predash.customs import exports, CustomsError
 from predash.krx import daily_activity, KRXError
@@ -75,7 +77,7 @@ button{min-height:48px!important;border-radius:5px!important}button p{font-size:
 @media(max-width:1100px){.pd-watch-top{grid-template-columns:1fr 1fr}.pd-watch-bottom{grid-template-columns:1fr 1fr}}
 @media(max-width:700px){.block-container{padding:1.2rem 1rem 2rem}h1{font-size:1.8rem!important}.pd-market,.pd-summary{grid-template-columns:1fr}.pd-market>div:first-child{border-right:0;border-bottom:1px solid var(--pd-line)}.pd-summary>div{padding:14px 20px;border-right:0;border-bottom:1px solid #577768}.pd-summary>div:last-child{border-bottom:0}.pd-card-body,.pd-watch-top,.pd-watch-bottom,.pd-holding-head{grid-template-columns:1fr}.pd-card,.pd-evidence,.pd-watch,.pd-holding{padding:18px}.pd-toolbar{margin-bottom:18px}.pd-market>div{padding:18px}.pd-holding-head{gap:12px}}
 
-/* Compact dashboard / UI 2.8 */
+/* Compact dashboard / UI 3.0 */
 .block-container{padding-top:1.2rem;padding-bottom:1.5rem}
 h1{font-size:1.8rem!important}h2,h3{font-size:1.2rem!important}
 p,li{font-size:16px;line-height:1.5}button p{font-size:16px!important}
@@ -93,6 +95,7 @@ p,li{font-size:16px;line-height:1.5}button p{font-size:16px!important}
 .pd-index-change{display:block;font-size:15px;margin:3px 0}.pd-index-change b{font-weight:650}.pd-market-flow{border-top:1px solid #dddccc;margin-top:9px;padding-top:7px}.pd-market-flow-row{display:grid;grid-template-columns:50px 58px 1fr;gap:8px;align-items:center;font-size:14px;margin:5px 0}.pd-market-flow-row b{font-size:14px}.pd-market-flow-track{height:6px;background:#e7eadf}.pd-market-flow-track i{display:block;height:6px;background:currentColor}.pd-market-flow small{font-size:12px!important}
 .pd-evidence-status{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid #dddccc;background:#fffef9;margin:8px 0 16px}.pd-evidence-status>div{padding:10px 14px;border-right:1px solid #dddccc}.pd-evidence-status>div:last-child{border:0}.pd-evidence-status small{display:block;font-size:13px;color:#53665c}.pd-evidence-status b{font-size:16px;color:#214b3a}@media(max-width:700px){.pd-evidence-status{grid-template-columns:1fr 1fr}}
 </style>''')
+apply_workspace_style()
 try:
     for k in ('APP_PASSWORD','DART_CRTFC_KEY','DATA_GO_KR_SERVICE_KEY','KRX_AUTH_KEY','CUSTOMS_API_KEY'):
         if k in st.secrets: os.environ[k]=str(st.secrets[k])
@@ -268,7 +271,7 @@ with st.sidebar:
     large_text=st.toggle('글자 크게 보기',value=st.query_params.get('text','')=='large')
     if large_text:st.query_params['text']='large'
     elif 'text' in st.query_params:del st.query_params['text']
-    st.caption('UI 2.8 · 본인 계정 · 조회 전용')
+    st.caption('UI 3.0 · 시장 상태 알림 · 조회 전용')
     if password and st.button('로그아웃'):
         st.session_state.clear();st.rerun()
 
@@ -276,20 +279,49 @@ with st.sidebar:
 if large_text:
     st.html('<style>.stApp p,.stApp li{font-size:20px}.pd-watch small,.pd-card-sub,.pd-card-note,.pd-card-body small,.pd-holding-head small{font-size:18px}.pd-v-table,.pd-v-empty,.pd-v-notice,.pd-v-company{font-size:18px}.pd-v-note,.pd-v-legend,.pd-v-table small,.pd-v-notice small,.pd-v-company small{font-size:16px}</style>')
 mode_label='모의투자' if page=='모의투자' else ('매매 연습' if page=='매매 연습' else '실전 조회' if account_settings()['mode']=='real' else '개인 분석')
-st.html(f"<div class='pd-toolbar'><span class='pd-toolbar-title'>PreDash / {html.escape(page)}</span><div class='pd-badges'><span class='pd-badge'>{html.escape(mode_label)}</span><span class='pd-badge gold'>조회 전용</span><span class='pd-badge'>UI 2.8</span></div></div>")
+st.html(f"<div class='pd-toolbar'><span class='pd-toolbar-title'>PreDash / {html.escape(page)}</span><div class='pd-badges'><span class='pd-badge'>{html.escape(mode_label)}</span><span class='pd-badge gold'>조회 전용</span><span class='pd-badge'>UI 3.0</span></div></div>")
 
 @st.cache_data(ttl=1800,show_spinner=False)
 def cached_vix(day):return fetch_vix(day)
+@st.cache_data(ttl=300,show_spinner=False)
+def cached_public_market():
+    return fetch_public_market(datetime.now(ZoneInfo('Asia/Seoul')))
+
+
 if page in ('오늘의 점검','내 계좌','관심종목','투자 근거'):
-    with st.expander('매크로 · VIX 변동성 위험도',expanded=True):
-        if st.button('VIX 새로고침'):cached_vix.clear()
-        try:
-            v=cached_vix(datetime.now(ZoneInfo('America/New_York')).date())
-            color={'낮음':'#214b3a','보통':'#876119','주의':'#b57621','높음':'#b63f3f'}[v['level']]
-            st.html(f"<div class='pd-holding'><strong style='color:{color}'>VIX {v['close']:.2f} · 변동성 {v['level']}</strong> · 전 관측일 대비 {v['change']:+.2f}p · 미국 기준일 {v['date']}<div style='height:12px;background:linear-gradient(to right,#214b3a 0% 30%,#a68137 30% 40%,#b57621 40% 60%,#b63f3f 60% 100%);position:relative'><span style='position:absolute;left:{min(v['close']/50*100,99):.1f}%;top:-5px;color:#000'>▼</span></div></div>")
-            st.caption('Cboe 일별 종가 · S&P 500 옵션 기대 변동성, 한국시장 손실 확률 아님. PreDash 기준: 15 미만 낮음 / 15~20 보통 / 20~30 주의 / 30 이상 높음. 실시간 아님 · 30분 캐시 · 눈금 범위 0~50, 50 이상 오른쪽 끝 표시.')
-            with st.expander('VIX 최근 흐름'):st.line_chart(v['rows'],x='날짜',y='VIX',height=180)
-        except MacroError as exc:st.info(str(exc))
+    if st.button('시장 상태 새로고침',key='workspace_market_refresh'):
+        cached_vix.clear()
+        st.session_state.pop('market_lamps',None)
+        cached_public_market.clear()
+
+
+def workspace_market():
+    settings=account_settings()
+    if not password or not all(settings[k] for k in ('key','secret','cano','product')):
+        return cached_public_market()
+    now=datetime.now(ZoneInfo('Asia/Seoul'))
+    saved=st.session_state.get('market_lamps') or {}
+    try:
+        stamp=datetime.fromisoformat(saved.get('fetched',''))
+        if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=ZoneInfo('Asia/Seoul'))
+        if timedelta(0)<=now-stamp<timedelta(minutes=5):return saved
+    except (ValueError,TypeError):pass
+    lamps,failures={},{}
+    try:
+        client=kis_client()
+        for name,code in (('코스피','0001'),('코스닥','1001')):
+            try:lamps[name]=index_lamp(client.index_bars(code),name,now.date())
+            except (BrokerError,MarketDataError) as exc:failures[name]=str(exc)
+    except BrokerError as exc:failures['전체']=str(exc)
+    if not any(lamps.values()):
+        return cached_public_market()
+    saved={**saved,'lamps':lamps,'failures':failures,'fetched':now.isoformat(),'version':2,'source':'한국투자증권 KIS 국내 지수 일봉'}
+    st.session_state.market_lamps=saved
+    return saved
+
+
+if page in ('관심종목','투자 근거'):
+    render_workspace(cached_vix,workspace_market)
 
 def allocation_panel(snapshot):
     positions=sorted(snapshot.get('positions',[]),key=lambda p:-p['weight'])
@@ -963,6 +995,7 @@ else:
     with action:
         refresh_account=st.button('계좌·지수 새로고침' if page=='오늘의 점검' else '내 계좌 새로고침',
             type='primary',disabled=not(password and configured),use_container_width=True)
+    workspace_slot=st.container()
     if refresh_account:
         try:
             with st.spinner('증권사 잔고를 조회합니다…'):
@@ -1049,6 +1082,9 @@ else:
                 for market_name,reason in market['flow_errors'].items():st.caption(f'{market_name} · {reason}')
                 st.caption('모의투자 서버에서 제공되지 않는 시세 API는 실전용 KIS 시세 연결이 필요할 수 있습니다. 실전 키를 모의 설정에 복사하지 마세요.')
 
+
+    with workspace_slot:
+        render_workspace(cached_vix,workspace_market)
 
     if not password or not configured:
         if not password:
